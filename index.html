@@ -460,13 +460,15 @@
         <div id="balances" class="sheet">
             <h2>Account Balances</h2>
             
-            <div class="instructions">
-                <h3>💡 Update these regularly:</h3>
+             <div class="instructions">
+                <h3>💡 How this works:</h3>
                 <ul>
-                    <li>Enter current balances from your bank/credit card statements</li>
-                    <li>Credit card balances should be positive numbers (what you owe)</li>
-                    <li>Update at least monthly to track your net worth over time</li>
+                    <li><strong>Starting Balance:</strong> Enter your balance as of Feb 1, 2026 (one time setup)</li>
+                    <li><strong>Current Balance:</strong> Update monthly from your bank statements</li>
+                    <li><strong>Calculated Balance:</strong> Automatically calculated from transactions</li>
+                    <li><strong>Difference:</strong> Shows if your transactions match reality (should be $0)</li>
                 </ul>
+                <p><strong>If there's a difference:</strong> You either missed logging a transaction, or need to add it!</p>
             </div>
             
             <table>
@@ -846,14 +848,83 @@
             const tbody = document.getElementById('balancesBody');
             
             const accounts = [
-                { type: 'Checking', name: 'East Cambridge Savings Bank', key: 'debit', color: '' },
-                { type: 'Savings', name: 'All America Bank HYSA', key: 'hysa', color: '' },
-                { type: 'Credit Card', name: 'Bank of America', key: 'credit1', color: '#fff3cd' },
-                { type: 'Credit Card', name: 'Apple Card', key: 'credit2', color: '#fff3cd' },
-                { type: 'Credit Card', name: 'Capital One', key: 'credit3', color: '#fff3cd' },
-                { type: 'Retirement', name: 'Edward Jones Roth IRA', key: 'roth', color: '#d4edda' },
-                { type: 'Retirement', name: 'City of Cambridge Retirement', key: 'retirement', color: '#d4edda' }
+                { type: 'Checking', name: 'East Cambridge Savings Bank', key: 'debit', color: '', isCredit: false },
+                { type: 'Savings', name: 'All America Bank HYSA', key: 'hysa', color: '', isCredit: false },
+                { type: 'Credit Card', name: 'Bank of America', key: 'credit1', color: '#fff3cd', isCredit: true },
+                { type: 'Credit Card', name: 'Apple Card', key: 'credit2', color: '#fff3cd', isCredit: true },
+                { type: 'Credit Card', name: 'Capital One', key: 'credit3', color: '#fff3cd', isCredit: true },
+                { type: 'Retirement', name: 'Edward Jones Roth IRA', key: 'roth', color: '#d4edda', isCredit: false },
+                { type: 'Retirement', name: 'City of Cambridge Retirement', key: 'retirement', color: '#d4edda', isCredit: false }
             ];
+            
+            tbody.innerHTML = accounts.map(acc => {
+                const startingBalance = balances[acc.key + '_starting'] || 0;
+                const currentBalance = balances[acc.key] || 0;
+                const calculatedBalance = calculateBalance(acc.key, acc.isCredit);
+                const difference = currentBalance - calculatedBalance;
+                
+                const diffColor = Math.abs(difference) < 0.01 ? '#28a745' : '#dc3545';
+                const diffText = difference === 0 ? '$0.00' : formatCurrency(difference);
+                
+                return `
+                <tr style="${acc.color ? `background: ${acc.color}` : ''}">
+                    <td><strong>${acc.name}</strong></td>
+                    <td><input type="number" class="starting-bal-input" data-key="${acc.key}" step="0.01" placeholder="0.00" 
+                        value="${startingBalance || ''}"></td>
+                    <td><input type="number" class="bal-input" data-key="${acc.key}" step="0.01" placeholder="0.00" 
+                        value="${currentBalance || ''}"></td>
+                    <td style="font-weight: bold;">${formatCurrency(calculatedBalance)}</td>
+                    <td style="color: ${diffColor}; font-weight: bold;">${diffText}</td>
+                    <td><input type="date" class="date-input" data-key="${acc.key}" 
+                        value="${balances[acc.key + '_date'] || ''}"></td>
+                </tr>
+            `;
+            }).join('');
+            
+            // Add event listeners to balance inputs
+            tbody.querySelectorAll('.bal-input, .date-input, .starting-bal-input').forEach(input => {
+                input.addEventListener('change', saveBalances);
+            });
+        }
+         function calculateBalance(accountKey, isCredit) {
+            const startingBalance = balances[accountKey + '_starting'] || 0;
+            let calculated = startingBalance;
+            
+            // Map account keys to transaction account values
+            const accountMap = {
+                'debit': 'Debit',
+                'hysa': 'HYSA',
+                'credit1': 'Credit1',
+                'credit2': 'Credit2',
+                'credit3': 'Credit3',
+                'roth': 'Roth',
+                'retirement': 'Retirement'
+            };
+            
+            const accountValue = accountMap[accountKey];
+            
+            transactions.forEach(txn => {
+                if (txn.account === accountValue) {
+                    if (isCredit) {
+                        // For credit cards: purchases increase balance (debt), payments decrease it
+                        if (txn.type === 'Purchase') {
+                            calculated += txn.amount;
+                        } else if (txn.type === 'Transfer') {
+                            calculated -= txn.amount; // Payment reduces debt
+                        }
+                    } else {
+                        // For checking/savings/retirement: income increases, purchases and transfers decrease
+                        if (txn.type === 'Income') {
+                            calculated += txn.amount;
+                        } else if (txn.type === 'Purchase' || txn.type === 'Transfer') {
+                            calculated -= txn.amount;
+                        }
+                    }
+                }
+            });
+            
+            return calculated;
+        }
             
             tbody.innerHTML = accounts.map(acc => `
                 <tr style="${acc.color ? `background: ${acc.color}` : ''}">
@@ -872,10 +943,15 @@
             });
         }
         
-        async function saveBalances() {
+     async function saveBalances() {
             const balanceData = {
                 user_id: currentUser.id
             };
+            
+            document.querySelectorAll('.starting-bal-input').forEach(input => {
+                const key = input.getAttribute('data-key') + '_starting';
+                balanceData[key] = parseFloat(input.value) || 0;
+            });
             
             document.querySelectorAll('.bal-input').forEach(input => {
                 const key = input.getAttribute('data-key');
@@ -897,6 +973,7 @@
                 if (error) throw error;
                 
                 balances = balanceData;
+                renderBalances(); // Re-render to update calculated balances
                 updateDashboard();
                 showSyncStatus('Synced ✓');
             } catch (error) {
